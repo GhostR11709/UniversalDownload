@@ -236,7 +236,7 @@ def build_ytdlp_opts(
 
 
 def _on_hook(status: dict[str, Any], progress: ProgressCallback | None, cancel: _Cancel) -> None:
-    if cancel.flag:
+    if cancel.is_set():
         raise DownloadCancelled("cancelled by user")
     if progress is not None:
         progress(status)

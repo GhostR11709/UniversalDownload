@@ -22,6 +22,10 @@ async function waitForJob(jobId) {
 async function downloadInBackground(url, pageUrl = '', title = '') {
   const queued = await request('/api/downloads', { method: 'POST', body: JSON.stringify({ url, page_url: pageUrl, title }) });
   const job = await waitForJob(queued.job.id);
+  return finishChromeDownload(job);
+}
+
+async function finishChromeDownload(job) {
   if (job.state !== 'done') throw new Error(job.error || 'Download failed.');
   const downloadId = await chrome.downloads.download({ url: `${API}/files/${encodeURIComponent(job.id)}`, filename: job.filename || undefined, saveAs: false });
   chrome.notifications.create(`ghostr-${job.id}`, { type: 'basic', iconUrl: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="%237c5cff"/><path fill="white" d="M16 30h24l-8-8 4-4 16 16-16 16-4-4 8-8H16z"/></svg>', title: 'GhostR download ready', message: job.title || 'The file is downloading in Chrome.' });
@@ -41,6 +45,10 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type !== 'download-context') return false;
-  downloadInBackground(message.url, message.pageUrl, message.title).then((job) => sendResponse({ ok: true, job })).catch((error) => sendResponse({ ok: false, error: error.message }));
+  request('/api/downloads', { method: 'POST', body: JSON.stringify({ url: message.url, page_url: message.pageUrl, title: message.title }) }).then(async (queued) => {
+    sendResponse({ ok: true, job: queued.job });
+    try { await finishChromeDownload(await waitForJob(queued.job.id)); }
+    catch (error) { chrome.notifications.create(`ghostr-error-${Date.now()}`, { type: 'basic', iconUrl: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="%23ef476f"/><path fill="white" d="M32 14 10 52h44L32 14zm0 12 3 14h-6l3-14zm0 20a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/></svg>', title: 'GhostR could not download that', message: error.message }); }
+  }).catch((error) => sendResponse({ ok: false, error: error.message }));
   return true;
 });

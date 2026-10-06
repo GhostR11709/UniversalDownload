@@ -118,6 +118,7 @@ def sweep_stale_files() -> None:
 def run_job(job: Job, quality: str = "best") -> None:
     """Executed on a worker thread: fetch metadata, download, probe, name it."""
     job.state = State.running
+    job.progress = Progress(stage="preparing")
     audio_only = quality == "audio"
     max_height = None if audio_only else quality_to_height(quality, settings.max_height)
 
@@ -129,13 +130,19 @@ def run_job(job: Job, quality: str = "best") -> None:
             pct = min(100.0, downloaded / float(total) * 100)
         elif status.get("status") == "finished":
             pct = 100.0
+        status_name = str(status.get("status") or "")
+        stage = {
+            "downloading": "downloading",
+            "finished": "finishing",
+            "error": "retrying",
+        }.get(status_name, "preparing")
         job.progress = Progress(
             percent=round(pct, 1),
             downloaded=downloaded,
             total=int(total) if total else None,
             speed=status.get("speed"),
             eta=status.get("eta"),
-            stage="finishing" if status.get("status") == "finished" else "",
+            stage=stage,
         )
 
     try:

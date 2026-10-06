@@ -6,6 +6,7 @@ A Chrome MV3 extension backed by a quiet Windows Python server. Paste a link, in
 
 - Polished popup with current-tab capture, paste, metadata preview, quality choices, queue progress, cancel, save, and reveal-folder actions.
 - Right-click any link, page, video, or audio and choose **Download with GhostR**.
+- Detects visible HTML5 videos and places a draggable **↓ GhostR** download button over the video.
 - Local-only API on `127.0.0.1:8756`; the extension does not send links through a hosted middleman.
 - Background launch with a packaged `UD Server.exe` process and a system-tray icon; no command window during normal use.
 - Cookies, browser impersonation, size limits, quality limits, concurrent jobs, and retry settings through `.env`.
@@ -21,6 +22,8 @@ A Chrome MV3 extension backed by a quiet Windows Python server. Paste a link, in
 Chrome does not allow a normal downloaded folder to silently install an unpacked extension. That one manual load is a browser security rule, not a bug in GhostR.
 
 The setup script creates `.venv`, builds `UD Server.exe`, installs Python dependencies, downloads a local FFmpeg build if FFmpeg is not already on `PATH`, registers Windows startup, and starts the server. It does not open the local dashboard automatically; the extension is the normal interface.
+
+Chrome saves completed files to its configured Downloads folder. The server keeps a temporary copy under `temp/ready/` until Chrome collects it; stale copies are cleaned up automatically.
 
 ## Updating from GitHub
 
