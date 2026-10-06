@@ -311,6 +311,29 @@ def human_size(num_bytes: float) -> str:
 
 # Containers that store tags as their own atoms and accept use_metadata_tags.
 _TAGGABLE = {".mp4", ".m4v", ".mov", ".m4a", ".mp3", ".mkv", ".webm", ".flv"}
+_MP4_LIKE = {".mp4", ".m4v", ".mov", ".m4a"}
+
+
+def container_ext(path: Path) -> str:
+    """What the file actually is, not what it is called.
+
+    The audio post-processor can leave MP4 content behind a .mp3 name, and
+    ffmpeg picks its muxer from the output extension, so asking first is the
+    difference between readable tags and a failed remux.
+    """
+    try:
+        proc = _run([settings.ffprobe, "-v", "quiet", "-print_format", "json",
+                     "-show_format", str(path)], timeout=60)
+        raw = proc.stdout.decode("utf-8", "replace") or "{}"
+        name = str(json.loads(raw).get("format", {}).get("format_name", ""))
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError, AttributeError):
+        return path.suffix.lower()
+    lowered = name.lower()
+    if "mp3" in lowered or "mpeg" in lowered:
+        return ".mp3"
+    if any(key in lowered for key in ("mov", "mp4", "m4a", "3gp")):
+        return ".mp4"
+    return path.suffix.lower()
 
 
 def embed_metadata(
@@ -324,14 +347,18 @@ def embed_metadata(
     Stream copy only, so it costs a second or two. Returns False instead of
     raising when the container will not take it: the caller keeps the file.
     """
-    if path.suffix.lower() not in _TAGGABLE or not path.exists():
+    if not path.exists():
+        return False
+    real_ext = container_ext(path)
+    if real_ext not in _TAGGABLE and path.suffix.lower() not in _TAGGABLE:
         return False
     clean = {str(key): str(value).strip() for key, value in tags.items()
              if value not in (None, "") and str(value).strip().lower() not in {"none", "unknown", "n/a"}}
     if not clean and not cover:
         return False
 
-    output = path.with_name(f"{path.stem}.tagged{path.suffix}")
+    output_ext = real_ext if real_ext in _TAGGABLE else path.suffix.lower()
+    output = path.with_name(f"{path.stem}.tagged{output_ext}")
     cover_path = path.with_name(f"{path.stem}.cover.jpg") if cover and has_video else None
     try:
         if cover_path:
@@ -349,7 +376,7 @@ def embed_metadata(
         cmd += ["-map_metadata", "-1"]
         for key, value in clean.items():
             cmd += ["-metadata", f"{key}={value}"]
-        if path.suffix.lower() in {".mp4", ".m4v", ".mov", ".m4a"}:
+        if output_ext in _MP4_LIKE:
             # use_metadata_tags silently discards an attached picture, so the
             # cover art path only gets faststart.
             cmd += ["-movflags", "faststart" if cover_path else "use_metadata_tags+faststart"]

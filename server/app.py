@@ -381,10 +381,11 @@ def run_job(job: Job, quality: str = "best") -> None:
         job.filename = custom_filename(job.requested_filename, default_filename, result.path)
 
     # Put the metadata inside the file (tags + cover) before it is moved out.
-    if job.embed_tags and has_video:
+    if job.embed_tags:
         job.progress = Progress(percent=100.0, stage="tagging")
         try:
-            job.tags_embedded = embed_metadata(result.path, _media_tags(meta), fetch_cover(meta.thumbnail), has_video)
+            cover = fetch_cover(meta.thumbnail) if has_video else None
+            job.tags_embedded = embed_metadata(result.path, _media_tags(meta), cover, has_video)
         except Exception as exc:  # noqa: BLE001 - tags must never break a download
             log.warning("tag embedding failed for job %s: %s", job.id, exc)
             job.tags_embedded = False

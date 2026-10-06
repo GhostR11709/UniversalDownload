@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Universal Downloader",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "Send video, audio, image, and post links to your local yt-dlp + FFmpeg engine.",
   "minimum_chrome_version": "116",
   "permissions": ["activeTab", "contextMenus", "notifications", "storage", "tabs"],
