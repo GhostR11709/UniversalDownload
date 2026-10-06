@@ -70,6 +70,9 @@ class Job:
     platform: str = ""
     emoji: str = ""
     quality: str = "best"
+    requested_filename: str = ""
+    folder: str = ""
+    metadata_enabled: bool = True
     state: State = State.queued
     progress: Progress = field(default_factory=Progress)
     error: str = ""
@@ -85,6 +88,9 @@ class Job:
     finished_at: float | None = None
     saved: bool = False
     path: Path | None = None
+    saved_path: str = ""
+    metadata_path: Path | None = None
+    metadata_filename: str = ""
     cancel: CancelFlag = field(default_factory=CancelFlag)
 
     def to_json(self) -> dict[str, Any]:
@@ -98,6 +104,9 @@ class Job:
             "platform": self.platform,
             "emoji": self.emoji,
             "quality": self.quality,
+            "requested_filename": self.requested_filename,
+            "folder": self.folder,
+            "metadata_enabled": self.metadata_enabled,
             "state": self.state.value,
             "progress": asdict(self.progress),
             "error": self.error,
@@ -112,6 +121,8 @@ class Job:
             "created_at": self.created_at,
             "finished_at": self.finished_at,
             "saved": self.saved,
+            "saved_path": self.saved_path,
+            "metadata_filename": self.metadata_filename,
         }
         data["age"] = round(time.time() - self.created_at, 1)
         return data

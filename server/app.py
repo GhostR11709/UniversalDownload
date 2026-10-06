@@ -8,9 +8,14 @@ The extension talks to this process over 127.0.0.1 only:
     GET    /api/jobs                    recent jobs, newest first
     GET    /api/jobs/{id}               one job with progress
     POST   /api/jobs/{id}/cancel        cooperative cancel
-    DELETE /api/jobs/{id}/file          drop the server-side temp copy
+    DELETE /api/jobs/{id}/file          delete the saved file from disk
+    DELETE /api/jobs                    forget finished jobs
     GET    /files/{id}                  stream the file (Range aware)
-    POST   /api/reveal                  open the containing folder
+    GET    /api/fs/roots                drives + Downloads/Desktop/… shortcuts
+    GET    /api/fs/list?path=…          sub-folders of one directory
+    POST   /api/fs/mkdir                create a folder inside the picker
+    POST   /api/reveal                  open the folder holding a download
+    POST   /api/open                    open a finished file
     POST   /api/settings                change live limits
     POST   /api/update                  pull a newer extension from GitHub
     GET    /                             small dashboard for humans
@@ -69,6 +74,18 @@ _RESERVED = {
 }
 
 
+def _origin_allowed(origin: str) -> bool:
+    """Only the extension and the local dashboard may drive this server."""
+    if origin.startswith("chrome-extension://"):
+        return True
+    if origin in {f"http://{settings.host}:{settings.port}",
+                  f"http://localhost:{settings.port}",
+                  f"https://{settings.host}:{settings.port}",
+                  f"https://localhost:{settings.port}"}:
+        return True
+    return os.getenv("ALLOW_ANY_ORIGIN", "0").lower() in {"1", "true", "yes", "on"}
+
+
 # --------------------------------------------------------------------------- #
 # helpers
 # --------------------------------------------------------------------------- #
@@ -89,6 +106,142 @@ def build_filename(meta_title: str, uploader: str, path: Path) -> str:
     return f"{stem}{path.suffix.lower()}"
 
 
+def custom_filename(requested: str, fallback: str, media_path: Path) -> str:
+    """Apply a user filename while keeping the downloaded media extension."""
+    raw = str(requested or "").replace("\\", "/").split("/")[-1].strip()
+    if not raw:
+        return fallback
+    stem = Path(raw).stem if Path(raw).suffix else raw
+    stem = safe_name(stem, fallback=Path(fallback).stem, max_len=110)
+    return f"{stem}{media_path.suffix.lower()}"
+
+
+# --------------------------------------------------------------------------- #
+# where files land
+# --------------------------------------------------------------------------- #
+def resolve_folder(raw: str | None, create: bool = True) -> Path:
+    """Expand a user supplied folder. Empty/invalid input falls back to the default."""
+    candidate = str(raw or "").strip().strip('"').strip("'")
+    if candidate:
+        expanded = os.path.expandvars(os.path.expanduser(candidate))
+        if expanded:
+            path = Path(expanded)
+            if not path.is_absolute() and settings.download_dir.is_absolute():
+                path = settings.download_dir / path
+            try:
+                path = path.resolve()
+            except OSError:
+                path = path.absolute()
+            if path.exists():
+                return path
+            if create:
+                try:
+                    path.mkdir(parents=True, exist_ok=True)
+                    return path
+                except OSError as exc:
+                    log.warning("cannot create %s: %s", path, exc)
+    return settings.download_dir
+
+
+def unique_target(folder: Path, filename: str) -> Path:
+    """Never overwrite: append ' (2)', ' (3)'… until the name is free."""
+    candidate = folder / filename
+    if not candidate.exists():
+        return candidate
+    stem, suffix, parent = Path(filename).stem, Path(filename).suffix, Path(filename).parent
+    if str(parent) not in {".", ""}:
+        return candidate
+    for index in range(2, 1000):
+        candidate = folder / f"{stem} ({index}){suffix}"
+        if not candidate.exists():
+            return candidate
+    raise DownloadFailure("Too many copies of that file name already exist.", "Rename it or pick another folder.")
+
+
+def default_folder() -> str:
+    return str(settings.download_dir)
+
+
+def _existing_dir(raw: str | None) -> Path | None:
+    candidate = str(raw or "").strip()
+    if not candidate:
+        return None
+    path = Path(os.path.expandvars(os.path.expanduser(candidate)))
+    try:
+        return path if path.is_dir() else None
+    except OSError:
+        return None
+
+
+def open_in_explorer(target: Path, select: bool = False) -> None:
+    """Open a file or folder with the OS default handler (no Chrome dialogs)."""
+    if sys.platform == "win32":
+        if select:
+            os.startfile(str(target.parent))  # noqa: S606
+            subprocess.Popen(["explorer", "/select,", str(target)], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        else:
+            os.startfile(str(target))  # noqa: S606
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(target)])
+    else:
+        subprocess.Popen(["xdg-open", str(target)])
+
+
+def special_folders() -> list[dict[str, str]]:
+    """The places people actually want to save to, resolved for this user."""
+    home = Path.home()
+    labels = (
+        ("Downloads", "Downloads"),
+        ("Desktop", "Desktop"),
+        ("Documents", "Documents"),
+        ("Videos", "Videos"),
+        ("Music", "Music"),
+        ("Pictures", "Pictures"),
+    )
+    found: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for label, folder in labels:
+        for base in (home, home / "OneDrive"):
+            candidate = base / folder
+            key = str(candidate).lower()
+            if candidate.is_dir() and key not in seen:
+                seen.add(key)
+                found.append({"label": label, "path": str(candidate)})
+                break
+    return found
+
+
+def fs_roots() -> list[dict[str, str]]:
+    if sys.platform == "win32":
+        roots = []
+        for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            drive = Path(f"{letter}:\\")
+            if drive.exists():
+                roots.append({"label": f"{letter}:\\", "path": str(drive)})
+        return roots
+    if sys.platform == "darwin":
+        return [{"label": "/", "path": "/"}, {"label": "Home", "path": str(Path.home())}]
+    return [{"label": "/", "path": "/"}, {"label": "Home", "path": str(Path.home())}]
+
+
+def fs_entries(path: Path) -> list[dict[str, str]]:
+    """Sub-directories only - the picker never shows files."""
+    entries: list[dict[str, str]] = []
+    try:
+        with os.scandir(path) as scan:
+            for item in scan:
+                try:
+                    if not item.is_dir() or item.name.startswith("."):
+                        continue
+                except OSError:
+                    continue
+                entries.append({"name": item.name, "path": item.path})
+    except OSError as exc:
+        raise DownloadFailure(f"Cannot open {path.name or path}.", str(exc)) from exc
+    entries.sort(key=lambda entry: entry["name"].lower())
+    return entries[:600]
+
+
 def _human_duration(seconds: float | None) -> str | None:
     if not seconds or seconds <= 0:
         return None
@@ -107,6 +260,8 @@ def sweep_stale_files() -> None:
             if job.finished_at and job.finished_at < cutoff and not job.saved and job.path:
                 try:
                     job.path.unlink(missing_ok=True)
+                    if job.metadata_path:
+                        job.metadata_path.unlink(missing_ok=True)
                     log.info("swept stale file for job %s", job.id)
                 except OSError:
                     pass
@@ -166,39 +321,106 @@ def run_job(job: Job, quality: str = "best") -> None:
         return
 
     meta = result.meta
-    job.progress = Progress(percent=100.0, stage="done")
+    job.progress = Progress(percent=100.0, stage="finalizing")
     job.title = meta.title
     job.platform = meta.platform
     job.emoji = meta.emoji
     job.uploader = meta.uploader
     job.thumbnail = meta.thumbnail
     job.duration = meta.duration
-    job.state = State.done
-    job.finished_at = time.time()
 
     try:
         info: MediaInfo = probe(result.path)
         job.width, job.height = info.width, info.height
         job.size = info.size
         job.duration = info.duration or meta.duration
-        job.filename = build_filename(meta.title, meta.uploader, result.path)
+        default_filename = build_filename(meta.title, meta.uploader, result.path)
+        job.filename = custom_filename(job.requested_filename, default_filename, result.path)
     except Exception as exc:  # noqa: BLE001
         log.warning("probe failed for job %s: %s", job.id, exc)
         job.size = result.path.stat().st_size
-        job.filename = build_filename(meta.title, meta.uploader, result.path)
+        default_filename = build_filename(meta.title, meta.uploader, result.path)
+        job.filename = custom_filename(job.requested_filename, default_filename, result.path)
 
-    # Park the file where the HTTP layer can stream it, then release the workdir.
-    READY_DIR.mkdir(parents=True, exist_ok=True)
-    target = READY_DIR / job.id / result.path.name
-    target.parent.mkdir(parents=True, exist_ok=True)
+    # Land the file in the folder the user picked. Nothing goes through Chrome,
+    # so there is no save dialog, no download shelf and no "show folder" popup.
+    folder = resolve_folder(job.folder)
     try:
-        shutil.move(str(result.path), str(target))
-        job.path = target
+        folder.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        log.warning("could not park file for job %s: %s", job.id, exc)
-        job.path = result.path
-    finally:
+        job.state = State.error
+        job.error = f"Could not use that folder ({folder})."
+        job.hint = str(exc)[:200]
         result.cleanup()
+        return
+
+    completed_at = time.time()
+    try:
+        final = unique_target(folder, job.filename)
+    except DownloadFailure as exc:
+        job.state = State.error
+        job.error, job.hint = exc.message, exc.hint
+        result.cleanup()
+        return
+
+    keep_workdir = False
+    try:
+        final.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(result.path), str(final))
+        job.path = final
+        job.saved = True
+    except (OSError, shutil.Error, ValueError) as exc:
+        # Cross-volume or locked destination: keep it in the temp area so the
+        # file is never lost and /files/{id} can still stream it.
+        log.warning("could not move file for job %s to %s: %s", job.id, folder, exc)
+        READY_DIR.mkdir(parents=True, exist_ok=True)
+        fallback = READY_DIR / job.id / final.name
+        fallback.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.move(str(result.path), str(fallback))
+            job.path = fallback
+        except (OSError, shutil.Error) as inner:
+            # Last resort: keep the workdir, it holds the only copy.
+            log.error("could not park file for job %s: %s", job.id, inner)
+            job.path = result.path
+            keep_workdir = True
+    finally:
+        if not keep_workdir:
+            result.cleanup()
+
+    job.saved_path = str(job.path)
+    job.filename = Path(job.saved_path).name
+    job.progress = Progress(percent=100.0, stage="done")
+
+    # Metadata sidecar next to the media: title, uploader, formats, view counts…
+    if job.metadata_enabled:
+        metadata_target = Path(job.saved_path).with_name(f"{Path(job.saved_path).stem}.info.json")
+        payload = {
+            "source_url": job.url,
+            "page_url": job.page_url,
+            "download_folder": str(folder),
+            "downloaded_filename": job.filename,
+            "downloaded_at": completed_at,
+            "platform": job.platform,
+            "uploader": job.uploader,
+            "duration": job.duration,
+            "resolution": f"{job.width}x{job.height}" if job.width and job.height else None,
+            "size_bytes": job.size,
+            "quality": job.quality,
+            "metadata": result.metadata,
+        }
+        try:
+            metadata_target.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+                encoding="utf-8",
+            )
+            job.metadata_path = metadata_target
+            job.metadata_filename = metadata_target.name
+        except OSError as exc:
+            log.warning("could not write metadata for job %s: %s", job.id, exc)
+
+    job.state = State.done
+    job.finished_at = completed_at
 
 
 def detect_url(url: str) -> dict:
@@ -254,6 +476,7 @@ def detect_url(url: str) -> dict:
         "is_live": meta.is_live,
         "formats": formats[:40],
         "webpage_url": meta.canonical_url,
+        "suggested_filename": safe_name(meta.title or "download"),
     }
 
 
@@ -363,7 +586,14 @@ class Handler(BaseHTTPRequestHandler):
         log.debug("%s - %s", self.address_string(), fmt % args)
 
     def _cors(self) -> None:
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self.headers.get("Origin") or ""
+        if origin and not _origin_allowed(origin):
+            # Deliberately omit the headers: the browser then blocks the call,
+            # so a random web page cannot drive this server's disk writes.
+            return
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Max-Age", "600")
@@ -401,6 +631,10 @@ class Handler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise DownloadFailure("Malformed request body.", str(exc)) from exc
 
+    def _origin_ok(self) -> bool:
+        origin = self.headers.get("Origin")
+        return not origin or _origin_allowed(origin)
+
     def do_OPTIONS(self) -> None:  # noqa: N802
         self._send(204, b"", "text/plain")
 
@@ -421,10 +655,25 @@ class Handler(BaseHTTPRequestHandler):
                     "ffmpeg": settings.ffmpeg, "ffprobe": settings.ffprobe,
                     "impersonate": settings.impersonate,
                     "max_height": settings.max_height,
+                    "max_concurrent": settings.max_concurrent_jobs,
                     "cookies": bool(settings.cookies_file),
                     "cookies_from_browser": bool(settings.cookies_from_browser),
+                    "default_folder": default_folder(),
+                    "home": str(Path.home()),
+                    "platform": sys.platform,
                     "repo": REPO_URL,
                 })
+                return
+            if path == "/api/fs/roots":
+                self._json({"ok": True, "roots": fs_roots(), "special": special_folders(),
+                            "default": default_folder(), "home": str(Path.home()),
+                            "platform": sys.platform})
+                return
+            if path == "/api/fs/list":
+                query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                folder = _existing_dir((query.get("path") or [""])[0]) or settings.download_dir
+                self._json({"ok": True, "path": str(folder), "parent": str(folder.parent) if folder.parent != folder else "",
+                            "writable": os.access(folder, os.W_OK), "entries": fs_entries(folder)})
                 return
             if path == "/api/jobs":
                 self._json([j.to_json() for j in JOBS.recent(settings.max_history)])
@@ -438,7 +687,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(job.to_json())
                 return
             if path.startswith("/files/"):
-                self._serve_file(path.split("/")[-1])
+                parts = [part for part in path.split("/") if part]
+                self._serve_file(parts[1], metadata=len(parts) == 3 and parts[2] == "metadata")
                 return
             self._json({"ok": False, "error": "Not found."}, 404)
         except Exception as exc:  # noqa: BLE001
@@ -448,6 +698,9 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         try:
             payload = self._body()
+            if not self._origin_ok():
+                self._json({"ok": False, "error": "Forbidden."}, 403)
+                return
 
             if path == "/api/detect":
                 url = str(payload.get("url") or "").strip()
@@ -468,6 +721,7 @@ class Handler(BaseHTTPRequestHandler):
                         f"({settings.max_concurrent_jobs} at a time).",
                     )
                 platform = detect(url)
+                folder = resolve_folder(str(payload.get("folder") or "")[:1024])
                 job = JOBS.create(
                     url,
                     title=str(payload.get("title") or "")[:300],
@@ -475,9 +729,12 @@ class Handler(BaseHTTPRequestHandler):
                     platform=platform.label,
                     emoji=platform.emoji,
                     quality=str(payload.get("quality") or "best")[:20],
+                    requested_filename=str(payload.get("filename") or "")[:260],
+                    folder=str(folder),
+                    metadata_enabled=payload.get("metadata") is not False,
                     progress=Progress(stage="queued"),
                 )
-                POOL.submit(run_job, job, job.quality)
+                submit_job(run_job, job, job.quality)
                 self._json({"ok": True, "job": job.to_json()})
                 return
 
@@ -493,17 +750,37 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/api/reveal":
                 job = JOBS.get(str(payload.get("id") or ""))
-                target = job.path.parent if job and job.path else None
+                target = Path(job.saved_path).parent if job and job.saved_path else (job.path.parent if job and job.path else None)
                 if target and target.exists():
-                    if sys.platform == "win32":
-                        os.startfile(str(target))  # noqa: S606
-                    elif sys.platform == "darwin":
-                        subprocess.Popen(["open", str(target)])
-                    else:
-                        subprocess.Popen(["xdg-open", str(target)])
+                    open_in_explorer(target)
                     self._json({"ok": True, "path": str(target)})
                     return
-                self._json({"ok": False, "error": "File is no longer on disk."}, 404)
+                self._json({"ok": False, "error": "That file is no longer on disk."}, 404)
+                return
+
+            if path == "/api/open":
+                job = JOBS.get(str(payload.get("id") or ""))
+                target = Path(job.saved_path) if job and job.saved_path else (job.path if job else None)
+                if target and target.exists():
+                    open_in_explorer(target)
+                    self._json({"ok": True, "path": str(target)})
+                    return
+                self._json({"ok": False, "error": "That file is no longer on disk."}, 404)
+                return
+
+            if path == "/api/fs/mkdir":
+                parent = _existing_dir(str(payload.get("path") or ""))
+                if not parent:
+                    raise DownloadFailure("That folder is not available.", "Pick an existing folder first.")
+                name = safe_name(str(payload.get("name") or "")[:80], fallback="New folder", max_len=60)
+                created = parent / name
+                try:
+                    created.mkdir(parents=True, exist_ok=False)
+                except FileExistsError as exc:
+                    raise DownloadFailure("That folder already exists.", "Pick another name.") from exc
+                except OSError as exc:
+                    raise DownloadFailure(f"Could not create {name}.", str(exc)[:200]) from exc
+                self._json({"ok": True, "path": str(created), "name": created.name})
                 return
 
             if path == "/api/settings":
@@ -522,6 +799,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:  # noqa: N802
         path = urllib.parse.urlparse(self.path).path
         try:
+            if not self._origin_ok():
+                self._json({"ok": False, "error": "Forbidden."}, 403)
+                return
             if path.startswith("/api/jobs/") and path.endswith("/file"):
                 job = JOBS.get(path.split("/")[3])
                 if not job:
@@ -532,7 +812,10 @@ class Handler(BaseHTTPRequestHandler):
                     parent = job.path.parent
                     if parent.name == job.id:
                         shutil.rmtree(parent, ignore_errors=True)
-                job.saved = True
+                if job.metadata_path:
+                    job.metadata_path.unlink(missing_ok=True)
+                job.saved = False
+                job.saved_path = ""
                 self._json({"ok": True})
                 return
             if path == "/api/jobs":
@@ -544,15 +827,15 @@ class Handler(BaseHTTPRequestHandler):
             self._error(exc, 500)
 
     # -- file streaming ---------------------------------------------------- #
-    def _serve_file(self, job_id: str) -> None:
+    def _serve_file(self, job_id: str, metadata: bool = False) -> None:
         job = JOBS.get(job_id)
-        if not job or not job.path or not job.path.exists():
+        path = job.metadata_path if metadata and job else job.path if job else None
+        if not job or not path or not path.exists():
             self._json({"ok": False, "error": "That file is gone."}, 404)
             return
-        path: Path = job.path
         size = path.stat().st_size
         ctype = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-        filename = job.filename or path.name
+        filename = job.metadata_filename if metadata else job.filename or path.name
         quoted = urllib.parse.quote(filename)
 
         start, end = 0, size - 1
@@ -608,12 +891,37 @@ def update_settings(payload: dict) -> dict:
         if 0 < value <= 8192:
             object.__setattr__(settings, "max_download_bytes", value * 1024 * 1024)
             applied["max_download_mb"] = value
+    if "max_concurrent" in payload:
+        value = int(payload["max_concurrent"] or 0)
+        if 1 <= value <= 8:
+            applied["max_concurrent"] = value
+    if "download_dir" in payload:
+        folder = resolve_folder(str(payload["download_dir"] or ""), create=False)
+        if folder.is_dir():
+            object.__setattr__(settings, "download_dir", folder)
+            applied["download_dir"] = str(folder)
     return applied
 
 
-POOL = ThreadPoolExecutor(max_workers=settings.max_concurrent_jobs,
-                          thread_name_prefix="ud-dl")
+_POOL_LOCK = threading.Lock()
+_POOL: ThreadPoolExecutor | None = None
+_POOL_SIZE = 0
 SERVER: ThreadingHTTPServer | None = None
+
+
+def submit_job(fn, *args, **kwargs) -> None:
+    """Queue work on a pool whose size follows settings.max_concurrent_jobs live."""
+    global _POOL, _POOL_SIZE
+    size = max(1, settings.max_concurrent_jobs)
+    with _POOL_LOCK:
+        if _POOL is None or _POOL_SIZE != size:
+            if _POOL is not None:
+                # wait=False keeps whatever is already running going.
+                _POOL.shutdown(wait=False, cancel_futures=False)
+            _POOL = ThreadPoolExecutor(max_workers=size, thread_name_prefix="ud-dl")
+            _POOL_SIZE = size
+        pool = _POOL
+    pool.submit(fn, *args, **kwargs)
 
 
 def serve_forever() -> None:
@@ -629,7 +937,11 @@ def serve_forever() -> None:
 
 
 def shutdown() -> None:
-    POOL.shutdown(wait=False, cancel_futures=True)
+    global _POOL
+    with _POOL_LOCK:
+        pool, _POOL = _POOL, None
+    if pool is not None:
+        pool.shutdown(wait=False, cancel_futures=True)
     if SERVER is not None:
         threading.Thread(target=SERVER.shutdown, daemon=True).start()
 

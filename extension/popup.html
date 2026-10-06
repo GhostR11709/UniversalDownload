@@ -3,29 +3,136 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>GhostR Downloader</title>
+  <title>Universal Downloader</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <main class="app-shell">
     <header class="topbar">
-      <div class="brand-lockup"><div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div><div><p class="eyebrow">GHOSTR11709</p><h1>Universal Downloader</h1></div></div>
+      <div class="brand-lockup">
+        <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div>
+          <p class="eyebrow">LOCAL ENGINE</p>
+          <h1>Universal Downloader</h1>
+        </div>
+      </div>
+      <p class="window-hint">Real window — drag the title bar to move it, drag the edge to resize.</p>
     </header>
-    <section class="engine-row" aria-live="polite"><span class="status-dot" id="status-dot"></span><span id="engine-status">Checking local engine…</span><button class="text-button" id="open-dashboard" type="button">Dashboard ↗</button></section>
-    <section class="hero-card"><div class="hero-copy"><p class="eyebrow accent">DROP A LINK. GHOST IT.</p><h2>Save the good stuff<br><em>before it disappears.</em></h2><p class="hero-subtitle">yt-dlp does the heavy lifting. FFmpeg cleans up the rest.</p></div><div class="orb" aria-hidden="true"><i></i><i></i><i></i></div></section>
-    <form id="download-form" class="download-form">
-      <label class="sr-only" for="url-input">Media link</label>
-      <div class="url-field"><span class="url-icon" aria-hidden="true">↗</span><input id="url-input" type="url" inputmode="url" autocomplete="off" placeholder="Paste a video, audio, or post link" required><button id="paste-button" class="field-action" type="button">Paste</button></div>
+
+    <section class="engine-row" aria-live="polite">
+      <span class="status-dot" id="status-dot"></span>
+      <span id="engine-status">Checking local engine…</span>
+    </section>
+
+    <form id="download-form" class="download-form" autocomplete="off">
+      <div class="url-field">
+        <span class="url-icon" aria-hidden="true">↗</span>
+        <label class="sr-only" for="url-input">Media link</label>
+        <input id="url-input" type="url" inputmode="url" placeholder="Paste a video, audio, image or post link" required>
+        <button id="paste-button" class="field-action" type="button">Paste</button>
+        <button id="current-tab" class="field-action" type="button">This tab</button>
+      </div>
       <button class="primary-button" id="inspect-button" type="submit"><span>Inspect link</span><b>→</b></button>
-      <button class="current-tab-button" id="current-tab" type="button">Use current tab</button>
     </form>
+
+    <section class="panel" aria-label="Download options">
+      <div class="panel-head">
+        <div><p class="eyebrow">BEFORE YOU DOWNLOAD</p><h2>Name &amp; location</h2></div>
+        <button id="reset-options" class="text-button" type="button">Reset</button>
+      </div>
+
+      <label class="field-label" for="filename-input">File name</label>
+      <div class="field-row">
+        <input id="filename-input" type="text" placeholder="Original video name" spellcheck="false">
+        <button id="original-name" class="small-button" type="button" title="Use the name the site gave the video">Original</button>
+      </div>
+
+      <label class="field-label" for="location-input">Save to folder</label>
+      <div class="field-row">
+        <input id="location-input" type="text" placeholder="C:\Users\You\Downloads" spellcheck="false">
+        <button id="pick-location" class="small-button" type="button">Pick Location</button>
+      </div>
+      <p class="path-preview" id="path-preview" title="">Will save to: <span>—</span></p>
+
+      <div class="option-grid">
+        <label class="option">
+          <span>Quality</span>
+          <select id="quality-select">
+            <option value="best">Best available</option>
+            <option value="2160">2160p · 4K</option>
+            <option value="1440">1440p · QHD</option>
+            <option value="1080">1080p · Full HD</option>
+            <option value="720">720p · HD</option>
+            <option value="480">480p · SD</option>
+            <option value="360">360p</option>
+            <option value="audio">Audio only (mp3)</option>
+          </select>
+        </label>
+        <label class="option">
+          <span>Max height</span>
+          <select id="height-select">
+            <option value="0">Server default</option>
+            <option value="2160">2160p</option>
+            <option value="1440">1440p</option>
+            <option value="1080">1080p</option>
+            <option value="720">720p</option>
+            <option value="480">480p</option>
+          </select>
+        </label>
+        <label class="option">
+          <span>At once</span>
+          <select id="parallel-select">
+            <option value="1">1 download</option>
+            <option value="2">2 downloads</option>
+            <option value="3">3 downloads</option>
+            <option value="4">4 downloads</option>
+          </select>
+        </label>
+      </div>
+
+      <label class="check-row"><input id="metadata-checkbox" type="checkbox" checked><span>Also save metadata <b>.info.json</b> next to the file</span></label>
+      <label class="check-row"><input id="notify-checkbox" type="checkbox" checked><span>Notify me when a download finishes</span></label>
+      <label class="check-row"><input id="floating-checkbox" type="checkbox" checked><span>Show the small download button on videos</span></label>
+      <p class="field-note" id="engine-note"></p>
+    </section>
+
     <section id="preview" class="preview-card hidden" aria-live="polite"></section>
-    <section class="section-heading"><div><p class="eyebrow">RECENT ACTIVITY</p><h2>Your queue</h2></div><button class="text-button hidden" id="clear-history" type="button">Clear finished</button></section>
-    <section id="queue" class="queue" aria-live="polite"><div class="empty-state" id="empty-state"><div class="empty-icon" aria-hidden="true">✦</div><p>No downloads yet.</p><span>Paste a link above and let the local engine work.</span></div></section>
-    <p class="download-location">Files are saved by Chrome in your Downloads folder.</p>
-    <p class="legal-note">Download only content you have permission to save. Local engine · v1.1.0</p>
-    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <section class="section-heading">
+      <div><p class="eyebrow">ACTIVITY</p><h2>Queue</h2></div>
+      <button class="text-button hidden" id="clear-history" type="button">Clear finished</button>
+    </section>
+    <section id="queue" class="queue" aria-live="polite">
+      <div class="empty-state"><div class="empty-icon" aria-hidden="true">↓</div><p>No downloads yet.</p><span>Paste a link above, pick a folder, press Download.</span></div>
+    </section>
+
+    <p class="legal-note">Files are written by the local engine straight into the folder you choose. Download only what you have permission to save.</p>
   </main>
+
+  <div id="picker" class="modal hidden" role="dialog" aria-modal="true" aria-label="Choose where to save">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>Pick a save folder</h2>
+        <button id="picker-close" class="icon-button" type="button" aria-label="Close">✕</button>
+      </div>
+      <div class="picker-tools">
+        <button id="picker-up" class="small-button" type="button">↑ Up</button>
+        <div id="picker-crumbs" class="picker-crumbs"></div>
+        <button id="picker-new" class="small-button" type="button">New folder</button>
+      </div>
+      <div id="picker-list" class="picker-list"></div>
+      <div class="picker-saved">
+        <p class="eyebrow">LAST USED</p>
+        <div id="picker-recent" class="picker-recent"></div>
+      </div>
+      <div class="modal-foot">
+        <button id="picker-cancel" class="small-button" type="button">Cancel</button>
+        <button id="picker-apply" class="primary-button" type="button"><span>Use this folder</span><b>✓</b></button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="popup.js"></script>
 </body>
 </html>

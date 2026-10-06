@@ -65,6 +65,23 @@ def _resolve_binary(explicit: str, name: str) -> str:
     return name
 
 
+def _default_download_dir() -> Path:
+    """Where finished files land when the user has not picked a folder yet."""
+    override = _str("DOWNLOAD_DIR")
+    if override:
+        return _path("DOWNLOAD_DIR", PROJECT_ROOT / "downloads")
+    home = Path.home()
+    candidates = (
+        home / "Downloads",
+        home / "OneDrive" / "Downloads",
+        Path(os.getenv("USERPROFILE") or home) / "Downloads",
+    )
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return PROJECT_ROOT / "downloads"
+
+
 @dataclass(frozen=True)
 class Settings:
     host: str
@@ -73,6 +90,7 @@ class Settings:
     temp_dir: Path
     keep_temp_seconds: int
     max_history: int
+    download_dir: Path
 
     max_height: int
     max_download_bytes: int
@@ -120,6 +138,7 @@ def load_settings() -> Settings:
         temp_dir=_path("TEMP_DIR", PROJECT_ROOT / "temp"),
         keep_temp_seconds=_int("KEEP_TEMP_SECONDS", 900),
         max_history=_int("MAX_HISTORY", 50),
+        download_dir=_default_download_dir(),
         max_height=_int("MAX_HEIGHT", 1080),
         max_download_bytes=_int("MAX_DOWNLOAD_MB", 2000) * MB,
         max_concurrent_jobs=max(1, _int("MAX_CONCURRENT_JOBS", 2)),

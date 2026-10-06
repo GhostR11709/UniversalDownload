@@ -103,6 +103,7 @@ class DownloadResult:
     meta: VideoMeta
     path: Path
     workdir: Path
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def cleanup(self) -> None:
         shutil.rmtree(self.workdir, ignore_errors=True)
@@ -587,7 +588,7 @@ def _download_once(
         log.info(
             "Downloaded %s (%s) -> %s in %.1fs", meta.platform, meta.video_id, path.name, elapsed,
         )
-        return DownloadResult(meta=meta, path=path, workdir=workdir)
+        return DownloadResult(meta=meta, path=path, workdir=workdir, metadata=raw)
 
     except (Cancelled, DownloadFailure):
         shutil.rmtree(workdir, ignore_errors=True)
