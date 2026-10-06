@@ -21,6 +21,8 @@ if errorlevel 1 goto :failed
 "%ROOT%.venv\Scripts\python.exe" -m pip install --upgrade pip --disable-pip-version-check
 "%ROOT%.venv\Scripts\python.exe" -m pip install -r requirements.txt --disable-pip-version-check
 if errorlevel 1 goto :failed
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\build_server.ps1"
+if errorlevel 1 goto :failed
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\install_ffmpeg.ps1"
 if errorlevel 1 goto :failed
 "%ROOT%.venv\Scripts\python.exe" -m server --install-autostart >nul

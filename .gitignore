@@ -8,5 +8,7 @@ temp/*
 logs/*
 !logs/.gitkeep
 tools/ffmpeg/
+build/
+UD Server.exe
 *.zip
 *.log

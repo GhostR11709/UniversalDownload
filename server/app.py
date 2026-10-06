@@ -55,7 +55,7 @@ from core.media import MediaInfo
 log = logging.getLogger("ud.server")
 
 APP_NAME = "UniversalDownload"
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(os.getenv("UD_PROJECT_ROOT") or Path(__file__).resolve().parent.parent)
 VERSION_FILE = PROJECT_ROOT / "VERSION"
 APP_VERSION = VERSION_FILE.read_text(encoding="utf-8").strip() if VERSION_FILE.exists() else "1.0.0"
 REPO_URL = "https://github.com/GhostR11709/UniversalDownload"
