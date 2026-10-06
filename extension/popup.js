@@ -14,12 +14,14 @@ const state = {
   pickerBefore: '',
   previewExt: '',
   prefs: {
-    metadata: true,
+    metadata: false,
+    embed: true,
     notify: true,
     floating: true,
     quality: 'best',
     maxHeight: 0,
     parallel: 2,
+    avgSpeed: 0,
   },
 };
 
@@ -60,6 +62,29 @@ function formatSize(bytes) {
 
 function formatSpeed(bytesPerSecond) {
   return bytesPerSecond ? `${formatSize(bytesPerSecond)}/s` : '';
+}
+
+// "1h 04m" / "3m 20s" / "42s" - the number people actually want to see.
+function formatDuration(seconds) {
+  if (seconds === null || seconds === undefined || !Number.isFinite(Number(seconds)) || Number(seconds) < 0) return '';
+  const total = Math.round(Number(seconds));
+  if (total < 1) return 'almost done';
+  if (total < 60) return `${total}s`;
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (hours) return `${hours}h ${String(minutes).padStart(2, '0')}m`;
+  return `${minutes}m ${String(total % 60).padStart(2, '0')}s`;
+}
+
+const FALLBACK_SPEED = 4 * 1024 * 1024;
+
+// Rolling average of real speeds, so "time left" is based on what this machine
+// actually manages instead of a guess.
+function observedSpeed(bytesPerSecond) {
+  if (!bytesPerSecond || bytesPerSecond < 1024) return;
+  const previous = state.prefs.avgSpeed || bytesPerSecond;
+  state.prefs.avgSpeed = Math.round(previous * 0.6 + bytesPerSecond * 0.4);
+  savePrefs();
 }
 
 function savePrefs() { chrome.storage.local.set({ [PREFS_KEY]: state.prefs, folder: state.folder }); }
@@ -192,10 +217,14 @@ function renderPreview(media) {
   const quality = $('#quality-select').value;
   state.previewExt = extensionFor(media, quality);
   $('#preview').classList.remove('hidden');
+const size = estimateSize(media, quality);
+  const speed = state.prefs.avgSpeed || FALLBACK_SPEED;
+  const eta = size ? formatDuration(size / speed) : '';
   const facts = [
     media.height ? `${media.width || '?'}×${media.height}` : null,
     media.duration_text,
-    formatSize(estimateSize(media, quality)),
+    formatSize(size),
+    eta ? `${eta} left` : null,
     media.is_live ? 'LIVE' : null,
   ].filter(Boolean);
 
@@ -256,6 +285,7 @@ async function queuePreview() {
         filename: $('#filename-input').value.trim(),
         folder: state.folder,
         metadata: state.prefs.metadata,
+        embed_tags: state.prefs.embed !== false,
       }),
     });
     rememberFolder(state.folder);
@@ -290,6 +320,7 @@ async function retryJob(job) {
         filename: job.requested_filename,
         folder: job.folder,
         metadata: state.prefs.metadata,
+        embed_tags: state.prefs.embed !== false,
       }),
     });
     chrome.runtime.sendMessage({ type: 'watch-job', jobId: result.job.id }).catch(() => {});
@@ -325,6 +356,8 @@ async function copyLink(job) {
 function renderJobs(jobs) {
   const queue = $('#queue');
   const active = jobs.some((job) => ['queued', 'running'].includes(job.state));
+  jobs.filter((job) => job.state === 'running' && job.progress?.speed)
+    .forEach((job) => observedSpeed(job.progress.speed));
   $('#clear-history').classList.toggle('hidden', !jobs.some((job) => ['done', 'error', 'cancelled'].includes(job.state)));
   if (!jobs.length) {
     queue.innerHTML = '<div class="empty-state"><div class="empty-icon">↓</div><p>No downloads yet.</p><span>Paste a link above, pick a folder, press Download.</span></div>';
@@ -337,13 +370,22 @@ function renderJobs(jobs) {
     const status = done ? 'Saved'
       : job.state === 'error' ? 'Failed'
       : job.state === 'cancelled' ? 'Cancelled'
-      : (job.progress?.stage || `${percent.toFixed(0)}%`);
+      : (job.progress?.stage === 'downloading' && job.progress?.eta
+        ? `${formatDuration(job.progress.eta)} left`
+        : (job.progress?.stage || `${percent.toFixed(0)}%`));
 
     const bits = [job.platform || 'Web', job.quality];
     if (job.size) bits.push(formatSize(job.size));
     if (job.width && job.height) bits.push(`${job.width}×${job.height}`);
-    if (running && job.progress?.speed) bits.push(formatSpeed(job.progress.speed));
-    if (done && job.metadata_filename) bits.push('metadata saved');
+    if (running) {
+      if (job.progress?.speed) bits.push(formatSpeed(job.progress.speed));
+      const left = job.progress?.eta;
+      if (left !== null && left !== undefined) bits.push(`${formatDuration(left)} left`);
+    }
+    if (done) {
+      if (job.tags_embedded) bits.push('tags embedded');
+      else if (job.metadata_filename) bits.push('metadata saved');
+    }
 
     const actions = [];
     if (running) actions.push(`<button data-cancel="${job.id}">Cancel</button>`);
@@ -514,6 +556,7 @@ $('#picker-new').addEventListener('click', async () => {
 });
 
 $('#metadata-checkbox').addEventListener('change', (event) => { state.prefs.metadata = event.target.checked; savePrefs(); });
+$('#embed-checkbox').addEventListener('change', (event) => { state.prefs.embed = event.target.checked; savePrefs(); });
 $('#notify-checkbox').addEventListener('change', (event) => { state.prefs.notify = event.target.checked; savePrefs(); });
 $('#floating-checkbox').addEventListener('change', (event) => { state.prefs.floating = event.target.checked; savePrefs(); });
 
@@ -557,12 +600,34 @@ document.addEventListener('keydown', (event) => {
 });
 
 chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type === 'load-url') {
+    loadFrom(message.url, message.title);
+    return;
+  }
   if (message?.type === 'job-finished') {
     if (message.job?.state === 'done') showToast(`Saved: ${message.job.filename}`);
     startPolling();
   }
   if (message?.type === 'download-status' && message.state === 'error') showToast(message.error || 'Download failed.', true);
 });
+
+// The window was opened (or reused) by the small button on a video: fill it in
+// and inspect, so the user can still change the name, folder and quality.
+async function loadFrom(url, title) {
+  if (!url) return;
+  $('#url-input').value = url;
+  state.preview = null;
+  state.previewExt = '';
+  $('#filename-input').value = '';
+  $('#filename-input').dataset.auto = '1';
+  $('#preview').classList.add('hidden');
+  const note = $('#ready-note');
+  note.classList.remove('hidden');
+  note.innerHTML = title
+    ? `Picked up from the page: <b>${escapeHtml(title.slice(0, 90))}</b><br>Check the name and folder below, then press Download.`
+    : 'Picked up from the page. Check the name and folder below, then press Download.';
+  if (state.server) await inspectLink();
+}
 
 // Remember this window's size and position so it reopens the same way.
 let boundsTimer = null;
@@ -591,11 +656,13 @@ addEventListener('pagehide', rememberBounds);
   });
   const prefs = stored[PREFS_KEY] || {};
   state.prefs = { ...state.prefs, ...prefs };
-  state.prefs.metadata = prefs.metadata !== false;
+  state.prefs.metadata = prefs.metadata === true;
+  state.prefs.embed = prefs.embed !== false;
   state.prefs.notify = prefs.notify !== false && stored.notify !== false;
   state.folder = stored.folder || '';
 
   $('#metadata-checkbox').checked = state.prefs.metadata;
+  $('#embed-checkbox').checked = state.prefs.embed;
   $('#notify-checkbox').checked = state.prefs.notify;
   $('#floating-checkbox').checked = state.prefs.floating !== false;
   $('#quality-select').value = state.prefs.quality || 'best';
@@ -612,8 +679,12 @@ addEventListener('pagehide', rememberBounds);
   }
   startPolling();
 
-  // Arrive on a fresh window already knowing what page you were looking at.
-  if (!$('#url-input').value.trim()) {
+  // Arrive already knowing what we are downloading, then inspect it.
+  const params = new URLSearchParams(location.search);
+  const startUrl = params.get('url');
+  if (startUrl) {
+    await loadFrom(startUrl, params.get('title') || '');
+  } else if (!$('#url-input').value.trim()) {
     const tab = await rememberedTab();
     if (tab?.url) {
       $('#url-input').value = tab.url;

@@ -55,7 +55,7 @@ from core import (
 )
 from core import media as media_mod
 from core.jobs import Job, Progress
-from core.media import MediaInfo
+from core.media import MediaInfo, embed_metadata, fetch_cover
 
 log = logging.getLogger("ud.server")
 
@@ -114,6 +114,34 @@ def custom_filename(requested: str, fallback: str, media_path: Path) -> str:
     stem = Path(raw).stem if Path(raw).suffix else raw
     stem = safe_name(stem, fallback=Path(fallback).stem, max_len=110)
     return f"{stem}{media_path.suffix.lower()}"
+
+
+def _media_tags(meta) -> dict[str, object]:
+    """Container tags: what a player shows in its "properties" panel."""
+    tags: dict[str, object] = {
+        "title": meta.title,
+        "artist": meta.uploader or meta.channel,
+        "album": meta.uploader or meta.platform,
+        "album_artist": meta.channel or meta.uploader,
+        "genre": meta.platform,
+        "date": meta.upload_date,
+        "composer": meta.uploader,
+        "performer": meta.uploader,
+        "publisher": meta.platform,
+        "source_url": meta.canonical_url or meta.url,
+        "comment": meta.description,
+    }
+    if meta.width and meta.height:
+        tags["resolution"] = f"{meta.width}x{meta.height}"
+    if meta.duration:
+        tags["duration"] = _human_duration(meta.duration)
+    if meta.view_count:
+        tags["views"] = meta.view_count
+    if meta.tags:
+        tags["genre"] = ", ".join(meta.tags[:6]) or meta.platform
+    return {key: value for key, value in tags.items()
+            if value not in (None, "", 0) and str(value).strip().lower() not in {"none", "unknown", "n/a"}}
+
 
 
 # --------------------------------------------------------------------------- #
@@ -288,15 +316,20 @@ def run_job(job: Job, quality: str = "best") -> None:
         status_name = str(status.get("status") or "")
         stage = {
             "downloading": "downloading",
-            "finished": "finishing",
+            "finished": "finalizing",
             "error": "retrying",
         }.get(status_name, "preparing")
+        speed = status.get("speed")
+        eta = status.get("eta")
+        # yt-dlp leaves eta empty on the first ticks and on chunked responses.
+        if eta is None and speed and total and downloaded < float(total):
+            eta = int(max(0.0, float(total) - downloaded) / float(speed))
         job.progress = Progress(
             percent=round(pct, 1),
             downloaded=downloaded,
             total=int(total) if total else None,
-            speed=status.get("speed"),
-            eta=status.get("eta"),
+            speed=speed,
+            eta=int(eta) if eta is not None else None,
             stage=stage,
         )
 
@@ -328,12 +361,17 @@ def run_job(job: Job, quality: str = "best") -> None:
     job.uploader = meta.uploader
     job.thumbnail = meta.thumbnail
     job.duration = meta.duration
+    job.description = meta.description[:900]
+    job.upload_date = meta.upload_date
+    job.page_url = job.page_url or meta.canonical_url
 
+    has_video = True
     try:
         info: MediaInfo = probe(result.path)
         job.width, job.height = info.width, info.height
         job.size = info.size
         job.duration = info.duration or meta.duration
+        has_video = info.has_video
         default_filename = build_filename(meta.title, meta.uploader, result.path)
         job.filename = custom_filename(job.requested_filename, default_filename, result.path)
     except Exception as exc:  # noqa: BLE001
@@ -341,6 +379,15 @@ def run_job(job: Job, quality: str = "best") -> None:
         job.size = result.path.stat().st_size
         default_filename = build_filename(meta.title, meta.uploader, result.path)
         job.filename = custom_filename(job.requested_filename, default_filename, result.path)
+
+    # Put the metadata inside the file (tags + cover) before it is moved out.
+    if job.embed_tags and has_video:
+        job.progress = Progress(percent=100.0, stage="tagging")
+        try:
+            job.tags_embedded = embed_metadata(result.path, _media_tags(meta), fetch_cover(meta.thumbnail), has_video)
+        except Exception as exc:  # noqa: BLE001 - tags must never break a download
+            log.warning("tag embedding failed for job %s: %s", job.id, exc)
+            job.tags_embedded = False
 
     # Land the file in the folder the user picked. Nothing goes through Chrome,
     # so there is no save dialog, no download shelf and no "show folder" popup.
@@ -731,7 +778,8 @@ class Handler(BaseHTTPRequestHandler):
                     quality=str(payload.get("quality") or "best")[:20],
                     requested_filename=str(payload.get("filename") or "")[:260],
                     folder=str(folder),
-                    metadata_enabled=payload.get("metadata") is not False,
+                    metadata_enabled=bool(payload.get("metadata")),
+                    embed_tags=payload.get("embed_tags") is not False,
                     progress=Progress(stage="queued"),
                 )
                 submit_job(run_job, job, job.quality)

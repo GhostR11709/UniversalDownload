@@ -9,13 +9,12 @@
   const GAP = 10;
   const DEFAULT_GLYPH = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 3h2v10.2l3.6-3.6L18 11l-6 6-6-6 1.4-1.4L11 13.2z"/><path d="M5 18h14v2H5z"/></svg>';
 
-  const prefs = { folder: '', floating: true };
+  const prefs = { floating: true };
 
   function loadPrefs() {
-    chrome.storage.local.get({ [PREFS_KEY]: {}, folder: '' }).then((stored) => {
+    chrome.storage.local.get({ [PREFS_KEY]: {} }).then((stored) => {
       const saved = stored[PREFS_KEY] || {};
       prefs.floating = saved.floating !== false;
-      prefs.folder = stored.folder || '';
       for (const entry of entries.values()) entry.host.hidden = !prefs.floating;
       scan();
     }).catch(() => {});
@@ -23,7 +22,6 @@
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
-    if (changes.folder) prefs.folder = changes.folder.newValue || '';
     if (changes[PREFS_KEY]) {
       const saved = changes[PREFS_KEY].newValue || {};
       prefs.floating = saved.floating !== false;
@@ -133,12 +131,13 @@
       entry.busy = true;
       button.classList.add('busy');
       setGlyph('&#8230;');
+      // Open the downloader with this video already loaded, so the user can
+      // confirm the file name and folder before anything is saved.
       chrome.runtime.sendMessage({
-        type: 'download-context',
+        type: 'open-downloader',
         url: targetUrl(video),
         pageUrl: location.href,
         title: document.title,
-        folder: prefs.folder,
       }, (response) => {
         if (chrome.runtime.lastError || !response?.ok) {
           setGlyph('!');

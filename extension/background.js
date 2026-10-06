@@ -73,14 +73,18 @@ async function currentMediaTab() {
 // The downloader is a real Chrome window: drag it anywhere, resize it, and it
 // reopens at the same size and position next time.
 // --------------------------------------------------------------------------- //
-async function openDownloaderWindow() {
-  // Capture the page the user was on before this window steals focus.
-  await captureFocusedTab();
+async function openDownloaderWindow(request = {}) {
+  // Remember the page this came from before our own window steals focus.
+  if (request.url) await rememberTab({ url: request.url, title: request.title || '' });
+  else await captureFocusedTab();
   if (downloaderWindowId !== null) {
     try {
       const existing = await chrome.windows.get(downloaderWindowId);
       if (existing) {
         await chrome.windows.update(downloaderWindowId, { focused: true, drawAttention: true });
+        if (request.url) {
+          chrome.runtime.sendMessage({ type: 'load-url', url: request.url, title: request.title || '' }).catch(() => {});
+        }
         return;
       }
     } catch {
@@ -97,7 +101,7 @@ async function openDownloaderWindow() {
     bounds.left = saved.left;
     bounds.top = saved.top;
   }
-  const page = popupUrl();
+  const page = popupUrl(request.url, request.title);
   try {
     const created = await chrome.windows.create({ url: page, type: 'popup', ...bounds, focused: true });
     downloaderWindowId = created.id;
@@ -108,9 +112,12 @@ async function openDownloaderWindow() {
 }
 
 // Hand the remembered page to the popup as ?url= so it can pre-fill instantly.
-function popupUrl() {
-  const page = chrome.runtime.getURL('popup.html');
-  return isWebTab(lastMediaTab) ? `${page}?url=${encodeURIComponent(lastMediaTab.url)}` : page;
+function popupUrl(url, title) {
+  const target = url || (isWebTab(lastMediaTab) ? lastMediaTab.url : '');
+  if (!isWebTab({ url: target })) return chrome.runtime.getURL('popup.html');
+  const params = new URLSearchParams({ url: target });
+  if (title) params.set('title', title);
+  return `${chrome.runtime.getURL('popup.html')}?${params}`;
 }
 
 async function captureFocusedTab() {
@@ -189,6 +196,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .catch(() => sendResponse({ ok: false, tab: null }));
     return true;
   }
+  if (message?.type === 'open-downloader') {
+    // The small button on a video: open the full dialog instead of grabbing it.
+    openDownloaderWindow({ url: message.url, title: message.title })
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
   if (message?.type === 'reveal' || message?.type === 'open') {
     const endpoint = message.type === 'reveal' ? '/api/reveal' : '/api/open';
     request(endpoint, { method: 'POST', body: JSON.stringify({ id: message.jobId }) })
@@ -207,9 +221,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 // Entry points
 // --------------------------------------------------------------------------- //
 chrome.action.onClicked.addListener(() => { openDownloaderWindow().catch(() => {}); });
-chrome.windows.onRemoved.addListener((windowId) => { if (windowId === downloaderWindowId) downloaderWindowId = null; });
 
 // Track the page the user is really looking at, ignoring our own window.
+chrome.windows.onRemoved.addListener((windowId) => { if (windowId === downloaderWindowId) downloaderWindowId = null; });
 chrome.windows.onFocusChanged.addListener((windowId) => { rememberActiveTabIn(windowId).catch(() => {}); });
 chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
   if (windowId === downloaderWindowId) return;

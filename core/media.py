@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import subprocess
 import tempfile
@@ -306,3 +307,91 @@ def human_size(num_bytes: float) -> str:
             return f"{value:.0f} {unit}" if unit == "B" else f"{value:.2f} {unit}"
         value /= 1024
     return f"{value:.2f} TB"
+
+
+# Containers that store tags as their own atoms and accept use_metadata_tags.
+_TAGGABLE = {".mp4", ".m4v", ".mov", ".m4a", ".mp3", ".mkv", ".webm", ".flv"}
+
+
+def embed_metadata(
+    path: Path,
+    tags: dict[str, object],
+    cover: bytes | None = None,
+    has_video: bool = True,
+) -> bool:
+    """Write tags (and cover art) into the file itself, without re-encoding.
+
+    Stream copy only, so it costs a second or two. Returns False instead of
+    raising when the container will not take it: the caller keeps the file.
+    """
+    if path.suffix.lower() not in _TAGGABLE or not path.exists():
+        return False
+    clean = {str(key): str(value).strip() for key, value in tags.items()
+             if value not in (None, "") and str(value).strip().lower() not in {"none", "unknown", "n/a"}}
+    if not clean and not cover:
+        return False
+
+    output = path.with_name(f"{path.stem}.tagged{path.suffix}")
+    cover_path = path.with_name(f"{path.stem}.cover.jpg") if cover and has_video else None
+    try:
+        if cover_path:
+            cover_path.write_bytes(cover)
+        cmd = [settings.ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+               "-i", str(path)]
+        if cover_path:
+            cmd += ["-i", str(cover_path)]
+        if cover_path:
+            cmd += ["-map", "0:v:0", "-map", "0:a:0?", "-map", "1:v:0",
+                    "-c", "copy", "-c:v:1", "mjpeg", "-disposition:v:1", "attached_pic"]
+        else:
+            cmd += ["-map", "0", "-c", "copy"]
+        # Drop whatever the site shipped so only our tags are readable back.
+        cmd += ["-map_metadata", "-1"]
+        for key, value in clean.items():
+            cmd += ["-metadata", f"{key}={value}"]
+        if path.suffix.lower() in {".mp4", ".m4v", ".mov", ".m4a"}:
+            # use_metadata_tags silently discards an attached picture, so the
+            # cover art path only gets faststart.
+            cmd += ["-movflags", "faststart" if cover_path else "use_metadata_tags+faststart"]
+        cmd.append(str(output))
+
+        proc = _run(cmd, timeout=300)
+        if proc.returncode != 0 or not output.exists() or output.stat().st_size == 0:
+            log.warning("embedding tags failed for %s: %s", path.name,
+                        (proc.stderr or b"").decode("utf-8", "replace")[-200:])
+            output.unlink(missing_ok=True)
+            return False
+        output.replace(path)
+        return True
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.warning("embedding tags failed for %s: %s", path.name, exc)
+        output.unlink(missing_ok=True)
+        return False
+    finally:
+        if cover_path:
+            cover_path.unlink(missing_ok=True)
+
+
+def fetch_cover(url: str | None, limit: int = 4 * 1024 * 1024, timeout: float = 12.0) -> bytes | None:
+    """Pull a thumbnail so it can live inside the file. Never raises."""
+    if not url or not re.match(r"^https?://", url, re.I):
+        return None
+    try:
+        import httpx
+
+        with httpx.stream("GET", url, timeout=timeout, follow_redirects=True,
+                          headers={"User-Agent": "Mozilla/5.0"}) as response:
+            if response.status_code != 200:
+                return None
+            chunks: list[bytes] = []
+            size = 0
+            for chunk in response.iter_bytes():
+                chunks.append(chunk)
+                size += len(chunk)
+                if size >= limit:
+                    break
+        data = b"".join(chunks)
+        return data or None
+    except Exception as exc:  # noqa: BLE001 - cover art is optional
+        log.debug("cover fetch failed: %s", exc)
+        return None

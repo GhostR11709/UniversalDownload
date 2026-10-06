@@ -35,6 +35,8 @@
       <button class="primary-button" id="inspect-button" type="submit"><span>Inspect link</span><b>→</b></button>
     </form>
 
+    <p class="ready-note hidden" id="ready-note"></p>
+
     <section class="panel" aria-label="Download options">
       <div class="panel-head">
         <div><p class="eyebrow">BEFORE YOU DOWNLOAD</p><h2>Name &amp; location</h2></div>
@@ -90,7 +92,8 @@
         </label>
       </div>
 
-      <label class="check-row"><input id="metadata-checkbox" type="checkbox" checked><span>Also save metadata <b>.info.json</b> next to the file</span></label>
+      <label class="check-row"><input id="embed-checkbox" type="checkbox" checked><span>Put metadata + cover <b>inside</b> the file</span></label>
+      <label class="check-row"><input id="metadata-checkbox" type="checkbox"><span>Also write a separate <b>.info.json</b> sidecar file</span></label>
       <label class="check-row"><input id="notify-checkbox" type="checkbox" checked><span>Notify me when a download finishes</span></label>
       <label class="check-row"><input id="floating-checkbox" type="checkbox" checked><span>Show the small download button on videos</span></label>
       <p class="field-note" id="engine-note"></p>

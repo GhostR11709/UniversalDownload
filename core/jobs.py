@@ -72,7 +72,8 @@ class Job:
     quality: str = "best"
     requested_filename: str = ""
     folder: str = ""
-    metadata_enabled: bool = True
+    metadata_enabled: bool = False
+    embed_tags: bool = True
     state: State = State.queued
     progress: Progress = field(default_factory=Progress)
     error: str = ""
@@ -81,9 +82,12 @@ class Job:
     size: int | None = None
     duration: float | None = None
     uploader: str = ""
+    description: str = ""
+    upload_date: str = ""
     thumbnail: str | None = None
     width: int | None = None
     height: int | None = None
+    tags_embedded: bool = False
     created_at: float = field(default_factory=time.time)
     finished_at: float | None = None
     saved: bool = False
@@ -107,6 +111,7 @@ class Job:
             "requested_filename": self.requested_filename,
             "folder": self.folder,
             "metadata_enabled": self.metadata_enabled,
+            "embed_tags": self.embed_tags,
             "state": self.state.value,
             "progress": asdict(self.progress),
             "error": self.error,
@@ -115,9 +120,12 @@ class Job:
             "size": self.size,
             "duration": self.duration,
             "uploader": self.uploader,
+            "description": self.description,
+            "upload_date": self.upload_date,
             "thumbnail": self.thumbnail,
             "width": self.width,
             "height": self.height,
+            "tags_embedded": self.tags_embedded,
             "created_at": self.created_at,
             "finished_at": self.finished_at,
             "saved": self.saved,
