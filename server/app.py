@@ -118,7 +118,8 @@ def sweep_stale_files() -> None:
 def run_job(job: Job, quality: str = "best") -> None:
     """Executed on a worker thread: fetch metadata, download, probe, name it."""
     job.state = State.running
-    max_height = quality_to_height(quality, settings.max_height)
+    audio_only = quality == "audio"
+    max_height = None if audio_only else quality_to_height(quality, settings.max_height)
 
     def on_progress(status: dict) -> None:
         downloaded = int(status.get("downloaded_bytes") or 0)
@@ -139,7 +140,8 @@ def run_job(job: Job, quality: str = "best") -> None:
 
     try:
         result = download(job.url, progress=on_progress, max_height=max_height,
-                          cancel=job.cancel, attempts=settings.retries)
+                          cancel=job.cancel, attempts=settings.retries,
+                          audio_only=audio_only)
     except Cancelled:
         job.state = State.cancelled
         job.progress = Progress(percent=0.0, stage="cancelled")

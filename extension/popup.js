@@ -1,6 +1,6 @@
 const API = 'http://127.0.0.1:8756';
 const $ = (selector) => document.querySelector(selector);
-const state = { preview: null, server: false, poll: null };
+const state = { preview: null, server: false, poll: null, defaultQuality: 'best' };
 
 async function request(path, options = {}) {
   const response = await fetch(`${API}${path}`, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
@@ -17,6 +17,7 @@ function renderPreview(media) {
   state.preview = media; $('#preview').classList.remove('hidden');
   $('#preview').innerHTML = `<div class="preview-top">${media.thumbnail ? `<img class="preview-thumb" src="${escapeAttribute(media.thumbnail)}" alt="">` : '<div class="preview-thumb"></div>'}<div class="preview-copy"><div class="eyebrow accent">${escapeHtml(media.emoji || '✦')} ${escapeHtml(media.platform || 'WEB')}</div><div class="preview-title">${escapeHtml(media.title || 'Untitled media')}</div><div class="preview-meta">${escapeHtml(media.uploader || 'Unknown creator')}${media.duration_text ? ` · ${escapeHtml(media.duration_text)}` : ''}</div></div></div><div class="preview-footer"><select id="quality-select" aria-label="Download quality"><option value="best">Best available</option><option value="2160">2160p · 4K</option><option value="1440">1440p</option><option value="1080">1080p · Full HD</option><option value="720">720p · HD</option><option value="480">480p</option><option value="audio">Audio only</option></select><button class="primary-button" id="queue-button" type="button"><span>Queue download</span><b>↓</b></button></div>`;
   $('#queue-button').addEventListener('click', queuePreview);
+  $('#quality-select').value = state.defaultQuality;
 }
 async function inspectLink(event) { event?.preventDefault(); const url = $('#url-input').value.trim(); if (!url) return; if (!state.server) { showToast('Start the local engine first.', true); return; } const button = $('#inspect-button'); button.disabled = true; button.querySelector('span').textContent = 'Inspecting…'; try { const result = await request('/api/detect', { method: 'POST', body: JSON.stringify({ url }) }); renderPreview(result.media); } catch (error) { $('#preview').classList.add('hidden'); showToast(error.message, true); } finally { button.disabled = false; button.querySelector('span').textContent = 'Inspect link'; } }
 async function queuePreview() { if (!state.preview) return; const quality = $('#quality-select').value; try { await request('/api/downloads', { method: 'POST', body: JSON.stringify({ url: state.preview.url, title: state.preview.title, quality }) }); showToast('Queued. The engine is on it.'); $('#preview').classList.add('hidden'); startPolling(); } catch (error) { showToast(error.message, true); } }
@@ -40,3 +41,4 @@ $('#paste-button').addEventListener('click', async () => { try { $('#url-input')
 $('#current-tab').addEventListener('click', async () => { const [tab] = await chrome.tabs.query({ active: true, currentWindow: true }); if (tab?.url) { $('#url-input').value = tab.url; inspectLink(); } else showToast('This tab has no readable URL.', true); });
 $('#open-dashboard').addEventListener('click', () => chrome.tabs.create({ url: API })); $('#open-options').addEventListener('click', () => chrome.runtime.openOptionsPage()); $('#clear-history').addEventListener('click', async () => { try { await request('/api/jobs', { method: 'DELETE' }); startPolling(); } catch (error) { showToast(error.message, true); } });
 checkHealth(); startPolling();
+chrome.storage.local.get({ defaultQuality: 'best' }).then((value) => { state.defaultQuality = value.defaultQuality; });

@@ -187,8 +187,9 @@ def build_ytdlp_opts(
     height: int,
     progress: ProgressCallback | None,
     cancel: "_Cancel | None",
+    audio_only: bool = False,
 ) -> dict[str, Any]:
-    fmt = "/".join(stem % {"h": height} for stem in _FORMAT_STEMS)
+    fmt = "ba[ext=m4a]/ba/b" if audio_only else "/".join(stem % {"h": height} for stem in _FORMAT_STEMS)
     opts: dict[str, Any] = {
         "outtmpl": {"default": str(workdir / "media.%(ext)s")},
         "format": fmt,
@@ -214,7 +215,11 @@ def build_ytdlp_opts(
         "cachedir": str(settings.temp_dir / "ytcache"),
         "restrictfilenames": False,
         "windowsfilenames": True,
-        "postprocessors": [],
+        "postprocessors": ([{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": "192",
+        }] if audio_only else []),
         "progress_hooks": [lambda d: _on_hook(d, progress, cancel)],
     }
 
@@ -482,6 +487,7 @@ def download(
     max_height: int | None = None,
     cancel: "CancelFlag | None" = None,
     attempts: int = 3,
+    audio_only: bool = False,
 ) -> DownloadResult:
     """Download a single item, retrying transient CDN/network failures.
 
@@ -498,7 +504,8 @@ def download(
             raise Cancelled("Download cancelled.")
 
         try:
-            return _download_once(url, progress=progress, max_height=max_height, cancel=cancel)
+            return _download_once(url, progress=progress, max_height=max_height,
+                                  cancel=cancel, audio_only=audio_only)
         except Cancelled:
             raise
         except DownloadFailure as exc:
@@ -537,6 +544,7 @@ def _download_once(
     progress: ProgressCallback | None,
     max_height: int | None,
     cancel: "CancelFlag | None",
+    audio_only: bool = False,
 ) -> DownloadResult:
     height = max_height or settings.max_height
     url = platforms.normalize_url(url)
@@ -548,7 +556,7 @@ def _download_once(
     try:
         check_reachable(url)
         _free_space_check(workdir, None)
-        opts = build_ytdlp_opts(workdir, height, progress, cancel)
+        opts = build_ytdlp_opts(workdir, height, progress, cancel, audio_only=audio_only)
         started = time.monotonic()
 
         with yt_dlp.YoutubeDL(opts) as ydl:

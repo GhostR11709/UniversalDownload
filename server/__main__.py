@@ -25,10 +25,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from core.config import settings  # noqa: E402
 from server import app  # noqa: E402
 
-STARTUP_SCRIPT = (
-    "wscript.exe",
-    str(PROJECT_ROOT / "start_hidden.vbs"),
-)
+STARTUP_SCRIPT = f'wscript.exe "{PROJECT_ROOT / "start_hidden.vbs"}"'
 
 
 def configure_logging() -> None:
