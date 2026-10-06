@@ -39,6 +39,6 @@ function escapeAttribute(value) { return escapeHtml(value).replace(/`/g, '&#96;'
 $('#download-form').addEventListener('submit', inspectLink);
 $('#paste-button').addEventListener('click', async () => { try { $('#url-input').value = await navigator.clipboard.readText(); $('#url-input').focus(); } catch { showToast('Chrome blocked clipboard access. Paste with Ctrl+V.', true); } });
 $('#current-tab').addEventListener('click', async () => { const [tab] = await chrome.tabs.query({ active: true, currentWindow: true }); if (tab?.url) { $('#url-input').value = tab.url; inspectLink(); } else showToast('This tab has no readable URL.', true); });
-$('#open-dashboard').addEventListener('click', () => chrome.tabs.create({ url: API })); $('#open-options').addEventListener('click', () => chrome.runtime.openOptionsPage()); $('#clear-history').addEventListener('click', async () => { try { await request('/api/jobs', { method: 'DELETE' }); startPolling(); } catch (error) { showToast(error.message, true); } });
+$('#open-dashboard').addEventListener('click', () => chrome.tabs.create({ url: API })); $('#clear-history').addEventListener('click', async () => { try { await request('/api/jobs', { method: 'DELETE' }); startPolling(); } catch (error) { showToast(error.message, true); } });
 checkHealth(); startPolling();
 chrome.storage.local.get({ defaultQuality: 'best' }).then((value) => { state.defaultQuality = value.defaultQuality; });

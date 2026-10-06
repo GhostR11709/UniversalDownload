@@ -29,7 +29,8 @@ echo.
 echo Setup complete. Load the extension from:
 echo %ROOT%extension
 echo Open chrome://extensions, enable Developer mode, then click Load unpacked.
-start "" "http://127.0.0.1:8756/"
+echo The server is running quietly in the background; the dashboard will not open automatically.
+start "" "chrome://extensions/"
 pause
 exit /b 0
 :failed

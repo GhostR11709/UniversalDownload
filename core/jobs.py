@@ -88,11 +88,31 @@ class Job:
     cancel: CancelFlag = field(default_factory=CancelFlag)
 
     def to_json(self) -> dict[str, Any]:
-        data = asdict(self)
-        data.pop("cancel", None)
-        data.pop("path", None)
-        data["state"] = self.state.value
-        data["progress"] = asdict(self.progress)
+        # Do not call asdict(self): it recursively deep-copies CancelFlag and
+        # threading.Event, which contains an unpicklable _thread.lock.
+        data = {
+            "id": self.id,
+            "url": self.url,
+            "title": self.title,
+            "page_url": self.page_url,
+            "platform": self.platform,
+            "emoji": self.emoji,
+            "quality": self.quality,
+            "state": self.state.value,
+            "progress": asdict(self.progress),
+            "error": self.error,
+            "hint": self.hint,
+            "filename": self.filename,
+            "size": self.size,
+            "duration": self.duration,
+            "uploader": self.uploader,
+            "thumbnail": self.thumbnail,
+            "width": self.width,
+            "height": self.height,
+            "created_at": self.created_at,
+            "finished_at": self.finished_at,
+            "saved": self.saved,
+        }
         data["age"] = round(time.time() - self.created_at, 1)
         return data
 

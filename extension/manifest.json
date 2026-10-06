@@ -1,11 +1,10 @@
 {
   "manifest_version": 3,
   "name": "GhostR Universal Downloader",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Send video, audio, image, and post links to your local yt-dlp + FFmpeg engine.",
   "permissions": ["activeTab", "contextMenus", "downloads", "notifications", "storage", "tabs"],
   "host_permissions": ["http://127.0.0.1:8756/*", "http://localhost:8756/*"],
   "background": { "service_worker": "background.js" },
-  "action": { "default_title": "GhostR Downloader", "default_popup": "popup.html" },
-  "options_page": "options.html"
+  "action": { "default_title": "GhostR Downloader", "default_popup": "popup.html" }
 }
